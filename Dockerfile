@@ -15,4 +15,4 @@ RUN apt-get update -qq && \
 
 ENTRYPOINT ["/marathon/bin/servicerouter.py"]
 
-EXPOSE 80
+EXPOSE 80 443
