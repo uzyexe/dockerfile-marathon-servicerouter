@@ -26,4 +26,4 @@ VOLUME ["/cron"]
 ENTRYPOINT ["/usr/local/bin/devcron.py"]
 CMD ["/cron/crontab"]
 
-EXPOSE 80 443
+EXPOSE 80 443 8080
