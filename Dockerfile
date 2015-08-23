@@ -23,6 +23,7 @@ RUN mkdir /cron &&\
 
 VOLUME ["/cron"]
 
-CMD ["/usr/local/bin/devcron.py /cron/crontab"]
+ENTRYPOINT ["/usr/local/bin/devcron.py"]
+CMD ["/cron/crontab"]
 
 EXPOSE 80 443
