@@ -33,7 +33,6 @@ docker run -d \
   --net="host" \
   --volume="/dev/log:/dev/log" \
   --volume="/tmp/ca-bundle.pem:/etc/ssl/mesosphere.com.pem:ro" \
-  --volume="/tmp/servicerouter.sh:/cron/servicerouter.sh" \
   uzyexe/marathon-servicerouter
 ```
 
