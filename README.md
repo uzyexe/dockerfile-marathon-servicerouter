@@ -21,7 +21,7 @@ This Docker image is based on the official [python:2.7.10](https://registry.hub.
 
 info: `/tmp/ca-bundle.pem` is SSL private key + SSL Certificate combined file.
 
-Command example of generating the `ca-bundle.pem`: `cat key.pem cert.pem > ca-bundle.pem`
+Command example of generating the ca-bundle.pem: `cat key.pem cert.pem > ca-bundle.pem`
 
 ### Normal running
 
