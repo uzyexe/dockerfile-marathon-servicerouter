@@ -1,0 +1,297 @@
+#cloud-config
+
+write_files:
+  - path: /etc/hosts
+    content: |
+        127.0.0.1 localhost
+        10.0.3.10 master
+        10.0.3.20 slave
+  - path: /tmp/common-environment.sh
+    permissions: 755
+    content: |
+        #!/bin/sh +x
+        cat << EOS > /etc/common-environment
+        MYID=10
+        IPADDR=10.0.3.10
+        ZOO_SERVER=10.0.3.10:2181
+        ZOOKEEPER_VERSION=3.4.6
+        MARATHON_VERSION=v0.10.1
+        MESOS_DNS_VERSION=latest
+        ROUTER_VERSION=v0.10.1
+        EOS
+  - path: /tmp/docker-environment.sh
+    permissions: 755
+    content: |
+        #!/bin/sh +x
+        DOCKER_REGISTORY_URL="`netstat -rn | grep "^0.0.0.0 " | cut -d " " -f10`:5000"
+        cat << EOS > /etc/docker-environment
+        DOCKER_OPTS="--registry-mirror=http://${DOCKER_REGISTORY_URL}"
+        EOS
+  - path: /tmp/zookeeper/myid
+    permissions: 644
+    owner: core
+  - path: /tmp/setup-zoo.sh
+    permissions: 755
+    content: |
+        #!/bin/sh +x
+        IPADDR=$1
+        cat << EOS > /etc/zoo.cfg
+        tickTime=5000
+        initLimit=10
+        syncLimit=5
+        dataDir=/tmp/zookeeper
+        clientPort=2181
+        maxClientCnxns=128
+        EOS
+  - path: /tmp/setup-mesos-dns-config.sh
+    permissions: 755
+    content: |
+      #!/bin/sh +x
+      ZOO_SERVER=$1
+      IPADDR=$2
+      cat << EOS > /etc/mesos-dns-config.json
+      {
+        "Zk": "zk://${ZOO_SERVER}/mesos",
+        "Masters": ["${IPADDR}:5050"],
+        "RefreshSeconds": 60,
+        "TTL": 60,
+        "Domain": "mesos",
+        "Port": 53,
+        "Timeout": 5,
+        "SOARname": "root.ns1.mesos",
+        "SOAMname": "ns1.mesos",
+        "SOARefresh": 60,
+        "SOARetry": 600,
+        "SOAExpire": 86400,
+        "SOAMinttl": 60,
+        "Resolvers": ["8.8.8.8", "8.8.4.4"],
+        "listener": "${IPADDR}",
+        "HTTPPort": 8123,
+        "DNSOn": true,
+        "HTTPOn": true,
+        "ExternalOn": true,
+        "RecurseOn": true
+      }
+      EOS
+
+coreos:
+  update:
+    reboot-strategy: off
+  units:
+    - name: setup-common-environment.service
+      command: start
+      content: |
+        [Unit]
+        Description=Setup Common Environment
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart=/bin/sh /tmp/common-environment.sh
+        [Install]
+        WantedBy=multi-user.target
+    - name: setup-docker-environment.service
+      command: start
+      content: |
+        [Unit]
+        Description=Setup /etc/docker-environment
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart=/bin/sh /tmp/docker-environment.sh
+        [Install]
+        WantedBy=multi-user.target
+    - name: setup-zookeeper-config.service
+      command: start
+      content: |
+        [Unit]
+        Description=Setup /etc/zoo.cfg
+        Requires=setup-common-environment.service
+        After=setup-common-environment.service
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        EnvironmentFile=/etc/common-environment
+        ExecStart=/tmp/setup-zoo.sh ${IPADDR}
+        [Install]
+        WantedBy=multi-user.target
+    - name: setup-mesos-dns-config.service
+      command: start
+      content: |
+        [Unit]
+        Description=Setup /etc/mesos-dns-config.json
+        Requires=setup-common-environment.service
+        After=setup-common-environment.service
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        EnvironmentFile=/etc/common-environment
+        ExecStart=/bin/sh /tmp/setup-mesos-dns-config.sh ${ZOO_SERVER} ${IPADDR}
+        [Install]
+        WantedBy=multi-user.target
+    - name: docker.service
+      command: start
+      content: |
+        [Unit]
+        Description=Docker Application Container Engine
+        Documentation=http://docs.docker.com
+        After=docker.socket early-docker.target network.target
+        Requires=docker.socket early-docker.target
+        [Service]
+        Environment=TMPDIR=/var/tmp
+        EnvironmentFile=-/run/flannel_docker_opts.env
+        EnvironmentFile=/etc/common-environment
+        EnvironmentFile=/etc/docker-environment
+        MountFlags=slave
+        LimitFSIZE=1024000000
+        LimitNPROC=20
+        ExecStart=/usr/lib/coreos/dockerd --daemon --host=fd:// $DOCKER_OPTS $DOCKER_OPT_BIP $DOCKER_OPT_MTU $DOCKER_OPT_IPMASQ
+        [Install]
+        WantedBy=multi-user.target
+    - name: etcd.service
+      command: stop
+    - name: fleet.service
+      command: stop
+    - name: zookeeper.service
+      command: start
+      content: |
+        [Unit]
+        Description=zookeeper
+        Requires=docker.service
+        After=docker.service
+        [Service]
+        Restart=always
+        RestartSec=300
+        TimeoutStartSec=10m
+        EnvironmentFile=/etc/common-environment
+        ExecStartPre=-/usr/bin/docker stop zookeeper
+        ExecStartPre=-/usr/bin/docker rm -f zookeeper
+        ExecStartPre=-/usr/bin/docker pull jplock/zookeeper:${ZOOKEEPER_VERSION}
+        ExecStartPre=/usr/bin/bash -c '/usr/bin/echo ${MYID} > /tmp/zookeeper/myid'
+        ExecStart=/usr/bin/docker run \
+                    --rm \
+                    --net="host" \
+                    --name="zookeeper" \
+                    jplock/zookeeper:${ZOOKEEPER_VERSION}
+        ExecStop=/usr/bin/docker stop zookeeper
+        [Install]
+        WantedBy=multi-user.target
+    - name: zookeeper-after-sleep.service
+      command: start
+      content: |
+        [Unit]
+        Description=zookeeper after sleep
+        Requires=zookeeper.service
+        After=zookeeper.service
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        EnvironmentFile=/etc/common-environment
+        ExecStart=/usr/bin/sleep 150
+        [Install]
+        WantedBy=multi-user.target
+    - name: marathon.service
+      command: start
+      content: |
+        [Unit]
+        Description=marathon.service
+        Requires=docker.service
+        After=zookeeper-after-sleep.service
+        [Service]
+        Restart=always
+        RestartSec=300
+        TimeoutStartSec=10m
+        EnvironmentFile=/etc/common-environment
+        ExecStartPre=-/usr/bin/docker stop marathon
+        ExecStartPre=-/usr/bin/docker rm -f marathon
+        ExecStartPre=-/usr/bin/docker pull mesosphere/marathon:${MARATHON_VERSION}
+        ExecStart=/usr/bin/docker run \
+                    --rm \
+                    --name="marathon" \
+                    --net="host" \
+                    mesosphere/marathon:${MARATHON_VERSION} \
+                    --master zk://${ZOO_SERVER}/mesos \
+                    --zk zk://${ZOO_SERVER}/marathon
+        ExecStop=/usr/bin/docker stop marathon
+        [Install]
+        WantedBy=multi-user.target
+    - name: mesos-dns.service
+      command: start
+      content: |
+        [Unit]
+        Description=mesos-dns.service
+        Requires=docker.service
+        After=zookeeper-after-sleep.service
+        [Service]
+        Restart=always
+        RestartSec=20
+        TimeoutStartSec=10m
+        EnvironmentFile=/etc/common-environment
+        ExecStartPre=-/usr/bin/docker stop mesos-master
+        ExecStartPre=-/usr/bin/docker rm -f mesos-master
+        ExecStartPre=-/usr/bin/docker pull mesosphere/mesos-dns:${MESOS_DNS_VERSION}
+        ExecStart=/usr/bin/docker run \
+                    --rm \
+                    --name="mesos-dns" \
+                    --net="host" \
+                    --volume="/etc/mesos-dns-config.json:/config.json:ro" \
+                    mesosphere/mesos-dns:${MESOS_DNS_VERSION} \
+                    /mesos-dns \
+                    -v 2 \
+                    -config=config.json
+        ExecStop=/usr/bin/docker stop mesos-dns
+        [Install]
+        WantedBy=multi-user.target
+    - name: master.service
+      command: start
+      content: |
+        [Unit]
+        Description=master.service
+        Requires=docker.service
+        After=zookeeper-after-sleep.service
+        [Service]
+        Restart=always
+        RestartSec=300
+        TimeoutStartSec=10m
+        EnvironmentFile=/etc/common-environment
+        ExecStartPre=-/usr/bin/docker stop master
+        ExecStartPre=-/usr/bin/docker rm -f master
+        ExecStartPre=-/usr/bin/docker pull mesosphere/marathon:${MARATHON_VERSION}
+        ExecStart=/usr/bin/docker run \
+                    --rm \
+                    --name="master" \
+                    --net="host" \
+                    --entrypoint="mesos-master" \
+                    mesosphere/marathon:${MARATHON_VERSION} \
+                    --ip=${IPADDR} \
+                    --quorum=1 \
+                    --zk=zk://${ZOO_SERVER}/mesos \
+                    --work_dir=/var/lib \
+                    --log_dir=/var/log
+        ExecStop=/usr/bin/docker stop mesos-master
+        [Install]
+        WantedBy=multi-user.target
+    - name: servicerouter.service
+      command: start
+      content: |
+        [Unit]
+        Description=servicerouter.service
+        Requires=docker.service
+        After=zookeeper-after-sleep.service
+        [Service]
+        Restart=always
+        RestartSec=300
+        TimeoutStartSec=10m
+        EnvironmentFile=/etc/common-environment
+        ExecStartPre=-/usr/bin/docker stop servicerouter
+        ExecStartPre=-/usr/bin/docker rm -f servicerouter
+        ExecStartPre=-/usr/bin/docker pull uzyexe/marathon-servicerouter:${ROUTER_VERSION}
+        ExecStart=/usr/bin/docker run \
+                    --rm \
+                    --name="servicerouter" \
+                    --net="host" \
+                    --volume="/dev/log:/dev/log" \
+                    --volume="/tmp/ca-bundle.pem:/etc/ssl/mesosphere.com.pem:ro" \
+                    uzyexe/marathon-servicerouter:${ROUTER_VERSION}
+        ExecStop=/usr/bin/docker stop servicerouter
+        [Install]
+        WantedBy=multi-user.target
