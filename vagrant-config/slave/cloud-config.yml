@@ -1,0 +1,114 @@
+#cloud-config
+
+write_files:
+  - path: /etc/hosts
+    content: |
+        127.0.0.1 localhost
+        10.0.3.10 master
+        10.0.3.20 slave
+  - path: /tmp/common-environment.sh
+    content: |
+        #!/bin/sh +x
+        cat << EOS > /etc/common-environment
+        IPADDR=10.0.3.20
+        MASTER_IPADDR=10.0.3.10
+        ZOO_SERVERS=10.0.3.10:2181
+        MESOS_VERSION=0.22.1-1.0.ubuntu1404
+        EOS
+  - path: /tmp/docker-environment.sh
+    permissions: 755
+    content: |
+        #!/bin/bash
+        DOCKER_REGISTORY_URL="`netstat -rn | grep "^0.0.0.0 " | cut -d " " -f10`:5000"
+        cat << EOS > /etc/docker-environment
+        DOCKER_OPTS=--registry-mirror="http://${DOCKER_REGISTORY_URL}"
+        EOS
+
+coreos:
+  update:
+    reboot-strategy: reboot
+  units:
+    - name: setup-common-environment.service
+      command: start
+      content: |
+        [Unit]
+        Description=Setup Arukas Cluster Environment
+        Requires=systemd-networkd.service
+        After=systemd-networkd.service
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart=/bin/sh /tmp/common-environment.sh
+        [Install]
+        WantedBy=multi-user.target
+    - name: setup-docker-environment.service
+      command: start
+      content: |
+        [Unit]
+        Description=Setup /etc/docker-environment
+        Requires=setup-common-environment.service
+        After=setup-common-environment.service
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        EnvironmentFile=/etc/common-environment
+        ExecStart=/bin/sh /tmp/docker-environment.sh
+        [Install]
+        WantedBy=multi-user.target
+    - name: etcd.service
+      command: stop
+    - name: fleet.service
+      command: stop
+    - name: docker.service
+      command: start
+      content: |
+        [Unit]
+        Description=Docker Application Container Engine
+        Documentation=http://docs.docker.com
+        After=docker.socket early-docker.target network.target
+        Requires=docker.socket early-docker.target
+        [Service]
+        Environment=TMPDIR=/var/tmp
+        EnvironmentFile=/etc/docker-environment
+        EnvironmentFile=-/run/flannel_docker_opts.env
+        MountFlags=slave
+        ExecStart=/usr/lib/coreos/dockerd --daemon --host=fd:// $DOCKER_OPTS $DOCKER_OPT_BIP $DOCKER_OPT_MTU $DOCKER_OPT_IPMASQ
+        [Install]
+        WantedBy=multi-user.target
+    - name: mesos-slave.service
+      command: start
+      content: |
+        [Unit]
+        Description=mesos-slave
+        Requires=docker.service
+        After=docker.service
+        [Service]
+        Restart=always
+        RestartSec=300
+        TimeoutStartSec=10m
+        EnvironmentFile=/etc/common-environment
+        ExecStartPre=-/usr/bin/docker stop test-mesos-slave
+        ExecStartPre=-/usr/bin/docker rm -f test-mesos-slave
+        ExecStartPre=-/usr/bin/docker pull mesosphere/mesos-slave:${MESOS_VERSION}
+        ExecStart=/bin/bash -c ' \
+                    /usr/bin/docker run \
+                    --rm \
+                    --name="test-mesos-slave" \
+                    --net="host" \
+                    --volume="/usr/bin/docker:/usr/bin/docker" \
+                    --volume="/var/run/docker.sock:/var/run/docker.sock" \
+                    --volume="/usr/lib/libdevmapper.so.1.02:/usr/lib/libdevmapper.so.1.02" \
+                    --volume="/sys/fs/cgroup:/sys/fs/cgroup" \
+                    mesosphere/mesos-slave:${MESOS_VERSION} \
+                    --hostname=`hostname` \
+                    --master="zk://${ZOO_SERVERS}/mesos" \
+                    --ip=${IPADDR} \
+                    --containerizers="mesos,docker" \
+                    --work_dir="/var/lib" \
+                    --log_dir="/var/log" \
+                    --executor_registration_timeout="15mins" \
+                    --isolation="cgroups/cpu,cgroups/mem" \
+                    --resource_monitoring_interval="240secs" '
+        ExecStop=/usr/bin/docker stop test-mesos-slave
+        [Install]
+        WantedBy=multi-user.target
