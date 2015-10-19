@@ -15,9 +15,9 @@ write_files:
         IPADDR=10.0.3.10
         ZOO_SERVER=10.0.3.10:2181
         ZOOKEEPER_VERSION=3.4.6
-        MARATHON_VERSION=v0.10.1
+        MARATHON_VERSION=v0.11.1
         MESOS_DNS_VERSION=latest
-        ROUTER_VERSION=v0.10.1
+        ROUTER_VERSION=v0.11.1
         EOS
   - path: /tmp/docker-environment.sh
     permissions: 755

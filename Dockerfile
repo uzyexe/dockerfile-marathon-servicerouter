@@ -1,6 +1,6 @@
 FROM python:2.7.10-slim
 
-ENV MARATHON_VERSION 0.11.0
+ENV MARATHON_VERSION 0.11.1
 ENV HAPROXY_VERSION 1.5.8-3+deb8u2
 
 # install haproxy and mercurial and rsyslog
