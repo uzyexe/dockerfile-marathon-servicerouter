@@ -2,6 +2,11 @@
 
 This is servicerouter.py docker container.
 
+# This Image is Deprecated
+
+It is recommended that you use the [marathon-lb](https://github.com/mesosphere/marathon-lb) Image.
+
+
 ## What is servicerouter.py
 
 servicerouter.py is a replacement for the haproxy-marathon-bridge implemented in Python. It reads Marathon task information and generates haproxy configuration. It supports advanced functions like sticky sessions, HTTP to HTTPS redirection, SSL offloading, VHost support and templating.
